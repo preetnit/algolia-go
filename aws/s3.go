@@ -1,9 +1,7 @@
 package aws
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -11,7 +9,6 @@ import (
 	"github.com/preetnit/algolia-go/algolia"
 	"github.com/preetnit/algolia-go/config"
 	"io"
-	"sync"
 )
 
 func ListBucketObjects(sess *session.Session, bucketName string) {
@@ -48,7 +45,7 @@ func ReadS3File(sess *session.Session, cfg *config.Application, fileName string)
 		Bucket:         aws.String(cfg.S3BucketName),
 		Key:            aws.String(fileName),
 		ExpressionType: aws.String(s3.ExpressionTypeSql),
-		Expression:     aws.String("SELECT *  FROM S3Object"),
+		Expression:     aws.String("SELECT r.objectID, r.hot_keywords, r.product_importance_score FROM S3Object r"),
 		InputSerialization: &s3.InputSerialization{
 			CSV: &s3.CSVInput{
 				FileHeaderInfo: aws.String(s3.FileHeaderInfoUse),
@@ -77,38 +74,10 @@ func ReadS3File(sess *session.Session, cfg *config.Application, fileName string)
 		}
 	}()
 
-	var wg sync.WaitGroup
-	resReader := json.NewDecoder(results)
-	var operations []search.BatchOperationIndexed
-	var record algolia.Record
-	for {
-		err := resReader.Decode(&record)
-		if err == io.EOF {
-			fmt.Println("EOF")
-			wg.Add(1)
-			go algolia.UpdateIndex(cfg, operations, &wg)
-			break
-		}
-
-		fmt.Printf("Record %v\n", record)
-		operations = append(operations, search.BatchOperationIndexed{
-			IndexName: cfg.AlgoliaIndexName,
-			BatchOperation: search.BatchOperation{
-				Action: search.PartialUpdateObjectNoCreate,
-				Body:   record,
-			},
-		})
-
-		if len(operations) == cfg.AlgoliaOpsBatchSize {
-			wg.Add(1)
-			go algolia.UpdateIndex(cfg, operations, &wg)
-			operations = nil
-		}
-	}
+	algolia.ProcessData(results, cfg)
 
 	if err := resp.EventStream.Err(); err != nil {
 		return fmt.Errorf("failed to read from SelectObjectContent EventStream, %v", err)
 	}
-	wg.Wait()
 	return nil
 }
